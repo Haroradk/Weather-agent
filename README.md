@@ -66,6 +66,26 @@ Every tool call and its raw result print to the terminal as `[tool]` /
 `[tool result]` lines - deliberately visible, not hidden, so you can see
 exactly what SQL the model chose to write and whether it made sense.
 
+### Chat UI (and testing it without spending Gemini quota)
+
+```bash
+source .venv/bin/activate
+streamlit run app.py
+```
+
+Opens at http://localhost:8502. Same agent loop as the CLI (imports
+`run_agent_turn` from `agent.py` directly, doesn't duplicate it), in a chat
+interface - each tool call renders as an expandable bubble showing the SQL
+and its result.
+
+The free Gemini tier is tight (5 requests/minute, 20/day), so there's a
+**"Demo mode"** checkbox in the sidebar for exercising the UI without
+spending any of it: it skips the LLM entirely, picks one hardcoded query by
+simple keyword-matching your question, and runs it for real against
+MotherDuck. The *data* is real; the *query selection* is scripted, not
+reasoned - it's for checking the interface works, not for asking it
+anything real. Turn it off to talk to the actual agent.
+
 ## What's deliberately simple here (and worth pushing on next)
 
 - **One tool, no schema discovery.** The model is handed the schema directly
