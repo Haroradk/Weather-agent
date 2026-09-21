@@ -12,7 +12,7 @@ MOTHERDUCK_TOKEN = os.environ.get("MOTHERDUCK_TOKEN")
 MOTHERDUCK_DATABASE = os.environ.get("MOTHERDUCK_DATABASE", "weather")
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")
 
 
 def get_connection() -> duckdb.DuckDBPyConnection:
