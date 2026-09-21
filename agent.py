@@ -119,9 +119,13 @@ SQL_TOOL = types.Tool(
 )
 
 
-def run_agent_turn(client: genai.Client, con, contents: list) -> str:
+def run_agent_turn(client: genai.Client, con, contents: list, on_tool_call=None) -> str:
     """Runs the tool-use loop for one user turn, mutating `contents` in place
-    with everything that happened, and returning the final text answer."""
+    with everything that happened, and returning the final text answer.
+
+    on_tool_call(sql, result), if given, is called instead of printing -
+    lets a UI (e.g. app.py) render the same tool-call transparency the CLI
+    prints, without duplicating this loop."""
     generate_config = types.GenerateContentConfig(
         system_instruction=SYSTEM_PROMPT,
         tools=[SQL_TOOL],
@@ -148,11 +152,16 @@ def run_agent_turn(client: genai.Client, con, contents: list) -> str:
         for call in function_calls:
             if call.name == "run_readonly_sql":
                 sql = call.args["sql"]
-                print(f"  [tool] run_readonly_sql: {sql}")
                 result = run_readonly_sql(con, sql)
-                print(f"  [tool result] {result[:300]}{'...' if len(result) > 300 else ''}")
+                if on_tool_call:
+                    on_tool_call(sql, result)
+                else:
+                    print(f"  [tool] run_readonly_sql: {sql}")
+                    print(f"  [tool result] {result[:300]}{'...' if len(result) > 300 else ''}")
             else:
                 result = f"ERROR: unknown tool {call.name}"
+                if on_tool_call:
+                    on_tool_call(f"<unknown tool: {call.name}>", result)
 
             response_parts.append(
                 types.Part.from_function_response(name=call.name, response={"result": result})
