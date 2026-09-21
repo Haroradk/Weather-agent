@@ -86,6 +86,27 @@ MotherDuck. The *data* is real; the *query selection* is scripted, not
 reasoned - it's for checking the interface works, not for asking it
 anything real. Turn it off to talk to the actual agent.
 
+## Cloud deployment: not done yet, on purpose
+
+Unlike [weather-app](https://github.com/Haroradk/weather-app), this isn't deployed anywhere
+public. Two reasons:
+
+1. **We deliberately deprioritized it** while getting the agent loop itself working locally
+   first.
+2. **The free Gemini quota (5 req/min, 20/day) is shared per API key, not per visitor.** The
+   dashboard app is safe to deploy publicly because it just reads precomputed data - anyone
+   opening it costs nothing extra. This agent calls Gemini on every question, so a public
+   deployment using *your* key means the first few visitors of the day exhaust it for
+   everyone, including you. That's a real design problem to solve before deploying, not just
+   a "click deploy" afterthought - e.g. by having each visitor paste their own free key into
+   the app instead of it using a shared one baked into secrets.
+
+If/when we do deploy it (mechanically, the same steps as weather-app): push to GitHub (done -
+[Haroradk/Weather-agent](https://github.com/Haroradk/Weather-agent)), then on
+[share.streamlit.io](https://share.streamlit.io), deploy `app.py` from that repo with
+`MOTHERDUCK_TOKEN` and `GEMINI_API_KEY` added as secrets - `app.py` already has the same
+Streamlit Cloud secrets bridge weather-app uses, so no code changes needed for that part.
+
 ## What's deliberately simple here (and worth pushing on next)
 
 - **One tool, no schema discovery.** The model is handed the schema directly
