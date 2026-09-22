@@ -28,50 +28,98 @@ from sql_tool import run_readonly_sql
 
 st.set_page_config(page_title="Weather Agent", page_icon="\U0001F916", layout="centered")
 
-DEMO_QUERIES = [
-    (
-        ("rain", "precip", "wet"),
-        "SELECT city, date, precipitation_sum_mm FROM gold.weather_daily_summary "
-        "WHERE date <= CURRENT_DATE ORDER BY date DESC LIMIT 9",
-    ),
-    (
-        ("wind",),
-        "SELECT city, date, wind_speed_max_kmh FROM gold.weather_daily_summary "
-        "WHERE date <= CURRENT_DATE ORDER BY date DESC LIMIT 9",
-    ),
-    (
-        ("forecast", "tomorrow", "predict"),
-        "SELECT city, target_date, predicted_temp_avg_c, predicted_precipitation_sum_mm "
-        "FROM gold.weather_forecast WHERE NOT is_backtest ORDER BY target_date DESC LIMIT 3",
-    ),
-]
-DEMO_DEFAULT_QUERY = (
-    "SELECT city, date, temp_min_c, temp_max_c, temp_avg_c FROM gold.weather_daily_summary "
-    "WHERE date <= CURRENT_DATE ORDER BY date DESC LIMIT 9"
-)
-
-
-def run_demo_turn(con, question: str, on_tool_call) -> str:
-    """No LLM call at all - picks one hardcoded query by simple keyword
-    matching, runs it for real, and returns a canned answer. Lets you see
-    the chat UI mechanics (tool-call expander, bubbles) work against real
-    data without spending any Gemini quota. Not reasoning - don't mistake
-    the "picked query" for the model understanding your question."""
-    question_lower = question.lower()
-    sql = DEMO_DEFAULT_QUERY
-    for keywords, candidate_sql in DEMO_QUERIES:
-        if any(keyword in question_lower for keyword in keywords):
-            sql = candidate_sql
-            break
-
-    result = run_readonly_sql(con, sql)
-    on_tool_call(sql, result)
+def _answer_rain(df):
+    top = df.loc[df["precipitation_sum_mm"].idxmax()]
+    top_date = str(top["date"])[:10]
     return (
-        "**[Demo mode - no LLM call made]** This is real data from a hardcoded "
-        "query chosen by simple keyword matching on your question, not an LLM "
-        "reasoning about it. Expand the tool-call above to see the query and result. "
-        "Turn off Demo mode in the sidebar to ask the real agent."
+        f"Over the last {df['date'].nunique()} days, **{top['city']}** had the most rain, "
+        f"with **{top['precipitation_sum_mm']:.1f} mm** on {top_date}."
     )
+
+
+def _answer_wind(df):
+    top = df.loc[df["wind_speed_max_kmh"].idxmax()]
+    top_date = str(top["date"])[:10]
+    return (
+        f"The windiest day recently was in **{top['city']}** on {top_date}, "
+        f"with a max wind speed of **{top['wind_speed_max_kmh']:.1f} km/h**."
+    )
+
+
+def _answer_forecast(df):
+    latest_date = str(df["target_date"].max())[:10]
+    rows = df[df["target_date"].astype(str).str.startswith(latest_date)]
+    parts = [
+        f"**{row.city}** ~{row.predicted_temp_avg_c:.1f}°C, "
+        f"{row.predicted_precipitation_sum_mm:.1f} mm rain"
+        for row in rows.itertuples()
+    ]
+    return f"Forecast for {latest_date}: " + "; ".join(parts) + "."
+
+
+def _answer_temp_range(df):
+    parts = [
+        f"**{city}**: {g['temp_min_c'].min():.1f}–{g['temp_max_c'].max():.1f}°C"
+        for city, g in df.groupby("city")
+    ]
+    return "Recent range – " + "; ".join(parts) + "."
+
+
+DEMO_QUESTIONS = [
+    {
+        "label": "Which city had the most rain recently?",
+        "sql": (
+            "SELECT city, date, precipitation_sum_mm FROM gold.weather_daily_summary "
+            "WHERE date <= CURRENT_DATE ORDER BY date DESC LIMIT 9"
+        ),
+        "answer": _answer_rain,
+    },
+    {
+        "label": "Which city had the strongest wind recently?",
+        "sql": (
+            "SELECT city, date, wind_speed_max_kmh FROM gold.weather_daily_summary "
+            "WHERE date <= CURRENT_DATE ORDER BY date DESC LIMIT 9"
+        ),
+        "answer": _answer_wind,
+    },
+    {
+        "label": "What's the forecast for tomorrow?",
+        "sql": (
+            "SELECT city, target_date, predicted_temp_avg_c, predicted_precipitation_sum_mm "
+            "FROM gold.weather_forecast WHERE NOT is_backtest ORDER BY target_date DESC LIMIT 3"
+        ),
+        "answer": _answer_forecast,
+    },
+    {
+        "label": "What was each city's recent temperature range?",
+        "sql": (
+            "SELECT city, date, temp_min_c, temp_max_c, temp_avg_c FROM gold.weather_daily_summary "
+            "WHERE date <= CURRENT_DATE ORDER BY date DESC LIMIT 9"
+        ),
+        "answer": _answer_temp_range,
+    },
+]
+
+
+def run_demo_turn(con, demo_question: dict, on_tool_call) -> str:
+    """No LLM call at all - runs one of a fixed set of queries picked from a
+    dropdown, and slots the actual returned values into a canned sentence
+    template. Lets you see the chat UI mechanics (tool-call expander,
+    templated answer) work against real data without spending any Gemini
+    quota. The *values* are real; the *sentence* is scripted, not reasoned."""
+    sql = demo_question["sql"]
+    result_text = run_readonly_sql(con, sql)
+    on_tool_call(sql, result_text)
+
+    # Re-run to get a DataFrame for the template - run_readonly_sql above
+    # returns pre-formatted text for the tool-call bubble, not raw values.
+    df = con.execute(sql).df()
+    try:
+        templated = demo_question["answer"](df)
+    except Exception:
+        templated = "Got a result but couldn't format a sentence from it - see the raw data above."
+
+    return f"**[Demo mode - no LLM call made]** {templated}"
 
 
 @st.cache_resource
@@ -127,7 +175,13 @@ for turn in st.session_state.display_history:
         render_tool_calls(turn["tool_calls"])
         st.write(turn["answer"])
 
-question = st.chat_input("Ask about the weather data...")
+if demo_mode:
+    demo_labels = [q["label"] for q in DEMO_QUESTIONS]
+    selected_label = st.selectbox("Pick a question", demo_labels, key="demo_question_select")
+    question = selected_label if st.button("Ask") else None
+else:
+    question = st.chat_input("Ask about the weather data...")
+
 if question:
     with st.chat_message("user"):
         st.write(question)
@@ -139,6 +193,7 @@ if question:
         tool_call_area = st.container()
 
         if demo_mode:
+            demo_question = next(q for q in DEMO_QUESTIONS if q["label"] == question)
             # Deliberately isolated from st.session_state.contents (the real
             # Gemini conversation state) - demo turns never touch it, so
             # switching Demo mode off mid-conversation can't leave that
@@ -146,7 +201,7 @@ if question:
             # between them).
             with st.spinner("Running demo query..."):
                 answer = run_demo_turn(
-                    con, question,
+                    con, demo_question,
                     on_tool_call=lambda sql, result: tool_calls_this_turn.append((sql, result)),
                 )
         else:

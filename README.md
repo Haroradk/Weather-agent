@@ -80,11 +80,13 @@ and its result.
 
 The free Gemini tier is tight (5 requests/minute, 20/day), so there's a
 **"Demo mode"** checkbox in the sidebar for exercising the UI without
-spending any of it: it skips the LLM entirely, picks one hardcoded query by
-simple keyword-matching your question, and runs it for real against
-MotherDuck. The *data* is real; the *query selection* is scripted, not
-reasoned - it's for checking the interface works, not for asking it
-anything real. Turn it off to talk to the actual agent.
+spending any of it: it skips the LLM entirely. Instead of typing a
+question, you pick one from a fixed dropdown list, it runs the real query
+behind that question against MotherDuck, and slots the actual returned
+values into a canned sentence template (e.g. "Copenhagen had the most
+rain, with 4.2mm on 2026-09-18"). The *data* is real; the *sentence* is
+scripted, not reasoned - it's for checking the interface works, not for
+asking it anything real. Turn it off to talk to the actual agent.
 
 ## Cloud deployment: not done yet, on purpose
 
