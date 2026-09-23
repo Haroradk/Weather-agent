@@ -26,6 +26,7 @@ from google.genai import types
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 import config
+from catalog_tool import build_catalog_summary, describe_table
 from sql_tool import run_readonly_sql
 
 
@@ -56,50 +57,27 @@ retry_on_transient_error = retry(
     reraise=True,
 )
 
-SYSTEM_PROMPT = """\
+SYSTEM_PROMPT_TEMPLATE = """\
 You are a weather-data assistant. You answer questions using ONLY real data
-from the weather warehouse, via the run_readonly_sql tool - never guess or
-make up numbers. If a question can't be answered from these tables, say so.
+from the weather warehouse (DuckDB/MotherDuck SQL) - never guess or make up
+numbers. If a question can't be answered from these tables, say so.
 
-Available tables (DuckDB/MotherDuck SQL):
+This catalog is read live from the warehouse's own descriptions. Read the
+table descriptions carefully - they contain rules (e.g. which rows are
+settled history vs. forecast) that change what the right query is.
 
-gold.weather_daily_summary
-  city VARCHAR                    -- 'Copenhagen', 'London', or 'New York'
-  date DATE                       -- IMPORTANT: this table blends real settled history
-                                   -- (date <= CURRENT_DATE) with Open-Meteo's own forecast
-                                   -- for the days ahead (date > CURRENT_DATE) IN THE SAME
-                                   -- TABLE. MAX(date) is therefore NOT "today" - it's several
-                                   -- days in the future. For any question about what actually
-                                   -- happened ("last N days", "so far", "recently", totals,
-                                   -- averages, "most rain"), always filter date <= CURRENT_DATE.
-                                   -- Only include date > CURRENT_DATE when the user explicitly
-                                   -- asks about the forecast/future.
-  temp_min_c DOUBLE
-  temp_max_c DOUBLE
-  temp_avg_c DOUBLE
-  precipitation_sum_mm DOUBLE
-  wind_speed_max_kmh DOUBLE
-  updated_at TIMESTAMP
+{catalog}
 
-gold.weather_forecast
-  city VARCHAR
-  target_date DATE
-  predicted_temp_min_c DOUBLE
-  predicted_temp_max_c DOUBLE
-  predicted_temp_avg_c DOUBLE
-  predicted_precipitation_sum_mm DOUBLE
-  predicted_wind_speed_max_kmh DOUBLE
-  model_type VARCHAR
-  training_rows INTEGER
-  is_backtest BOOLEAN             -- true = retroactive evaluation, false = a real live prediction
-  trained_at TIMESTAMP
+Tools:
+- describe_table: column names, types and descriptions for one table. Call
+  it before querying a table whose columns you haven't seen yet.
+- run_readonly_sql: run one SELECT query. Anything else is rejected.
 
-Only SELECT queries are allowed - the tool will reject anything else. When
-you have your answer, respond in plain, concise English and cite the
+When you have your answer, respond in plain, concise English and cite the
 specific numbers you found (don't just say "it was warmer", say by how much).
 """
 
-SQL_TOOL = types.Tool(
+TOOLS = types.Tool(
     function_declarations=[
         types.FunctionDeclaration(
             name="run_readonly_sql",
@@ -114,21 +92,46 @@ SQL_TOOL = types.Tool(
                 },
                 required=["sql"],
             ),
-        )
+        ),
+        types.FunctionDeclaration(
+            name="describe_table",
+            description="Get the columns of one warehouse table or view, with their types and descriptions.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "table_name": types.Schema(
+                        type="STRING",
+                        description="Fully qualified name, e.g. gold.weather_daily_summary.",
+                    ),
+                },
+                required=["table_name"],
+            ),
+        ),
     ]
 )
+
+
+def _execute_tool(con, call) -> tuple:
+    """Returns (label for display, result text)."""
+    if call.name == "run_readonly_sql":
+        sql = call.args["sql"]
+        return sql, run_readonly_sql(con, sql)
+    if call.name == "describe_table":
+        table_name = call.args["table_name"]
+        return f"describe_table({table_name})", describe_table(con, table_name)
+    return f"<unknown tool: {call.name}>", f"ERROR: unknown tool {call.name}"
 
 
 def run_agent_turn(client: genai.Client, con, contents: list, on_tool_call=None) -> str:
     """Runs the tool-use loop for one user turn, mutating `contents` in place
     with everything that happened, and returning the final text answer.
 
-    on_tool_call(sql, result), if given, is called instead of printing -
+    on_tool_call(label, result), if given, is called instead of printing -
     lets a UI (e.g. app.py) render the same tool-call transparency the CLI
     prints, without duplicating this loop."""
     generate_config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT,
-        tools=[SQL_TOOL],
+        system_instruction=SYSTEM_PROMPT_TEMPLATE.format(catalog=build_catalog_summary(con)),
+        tools=[TOOLS],
     )
 
     @retry_on_transient_error
@@ -150,18 +153,12 @@ def run_agent_turn(client: genai.Client, con, contents: list, on_tool_call=None)
 
         response_parts = []
         for call in function_calls:
-            if call.name == "run_readonly_sql":
-                sql = call.args["sql"]
-                result = run_readonly_sql(con, sql)
-                if on_tool_call:
-                    on_tool_call(sql, result)
-                else:
-                    print(f"  [tool] run_readonly_sql: {sql}")
-                    print(f"  [tool result] {result[:300]}{'...' if len(result) > 300 else ''}")
+            label, result = _execute_tool(con, call)
+            if on_tool_call:
+                on_tool_call(label, result)
             else:
-                result = f"ERROR: unknown tool {call.name}"
-                if on_tool_call:
-                    on_tool_call(f"<unknown tool: {call.name}>", result)
+                print(f"  [tool] {label}")
+                print(f"  [tool result] {result[:300]}{'...' if len(result) > 300 else ''}")
 
             response_parts.append(
                 types.Part.from_function_response(name=call.name, response={"result": result})

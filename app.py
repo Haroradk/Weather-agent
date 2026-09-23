@@ -65,7 +65,31 @@ def _answer_temp_range(df):
     return "Recent range – " + "; ".join(parts) + "."
 
 
+def _answer_rainy_days(df):
+    ranked = df.sort_values("rainy_days", ascending=False)
+    top = ranked.iloc[0]
+    others = ", ".join(f"{r.city} {r.rainy_days}" for r in ranked.iloc[1:].itertuples())
+    return (
+        f"**{top['city']}** had the most rainy days: **{top['rainy_days']}** (others: {others}). "
+        "The definition of a rainy day came from the warehouse's semantic layer, not this app."
+    )
+
+
+def _rainy_days_sql(con):
+    # Built from gold.metric_definitions at run time - change the definition in
+    # weather-etl-pipeline's semantic_layer.yml and this query follows it.
+    expression, table, filter_sql = con.execute(
+        "SELECT expression, table_name, filter FROM gold.metric_definitions WHERE name = 'rainy_days'"
+    ).fetchone()
+    return f"SELECT city, {expression} AS rainy_days FROM {table} WHERE {filter_sql} GROUP BY city"
+
+
 DEMO_QUESTIONS = [
+    {
+        "label": "Which city had the most rainy days? (metric from the semantic layer)",
+        "sql": _rainy_days_sql,
+        "answer": _answer_rainy_days,
+    },
     {
         "label": "Which city had the most rain recently?",
         "sql": (
@@ -107,7 +131,7 @@ def run_demo_turn(con, demo_question: dict, on_tool_call) -> str:
     template. Lets you see the chat UI mechanics (tool-call expander,
     templated answer) work against real data without spending any Gemini
     quota. The *values* are real; the *sentence* is scripted, not reasoned."""
-    sql = demo_question["sql"]
+    sql = demo_question["sql"](con) if callable(demo_question["sql"]) else demo_question["sql"]
     result_text = run_readonly_sql(con, sql)
     on_tool_call(sql, result_text)
 
@@ -141,8 +165,8 @@ st.caption(
 demo_mode = st.sidebar.checkbox(
     "Demo mode (no Gemini calls)",
     value=False,
-    help="Runs a hardcoded query picked by keyword-matching your question, against real "
-    "data, with no LLM call - for exercising the UI without spending Gemini quota.",
+    help="Pick from a fixed list of questions; each runs a real query and fills the values "
+    "into a canned sentence, with no LLM call - for exercising the UI without spending Gemini quota.",
 )
 
 if not demo_mode and not config.GEMINI_API_KEY:
