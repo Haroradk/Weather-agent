@@ -27,6 +27,7 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 import config
 from catalog_tool import build_catalog_summary, describe_table
+from search_tool import search_forecast_discussions
 from sql_tool import run_readonly_sql
 
 
@@ -72,6 +73,11 @@ Tools:
 - describe_table: column names, types and descriptions for one table. Call
   it before querying a table whose columns you haven't seen yet.
 - run_readonly_sql: run one SELECT query. Anything else is rejected.
+- search_forecast_discussions: semantic search over what National Weather
+  Service forecasters (New York office) wrote in their forecast discussions.
+  Use it for questions about forecasters' reasoning, warnings, storms or
+  hazards - things numbers alone don't capture. Quote what you use, with
+  its issue date. New York only.
 
 When you have your answer, respond in plain, concise English and cite the
 specific numbers you found (don't just say "it was warmer", say by how much).
@@ -94,6 +100,20 @@ TOOLS = types.Tool(
             ),
         ),
         types.FunctionDeclaration(
+            name="search_forecast_discussions",
+            description="Find the passages of National Weather Service forecaster discussions (New York) most relevant to a question, by meaning rather than keywords.",
+            parameters=types.Schema(
+                type="OBJECT",
+                properties={
+                    "query": types.Schema(
+                        type="STRING",
+                        description="What to look for, in plain English, e.g. 'coastal flooding this weekend'.",
+                    ),
+                },
+                required=["query"],
+            ),
+        ),
+        types.FunctionDeclaration(
             name="describe_table",
             description="Get the columns of one warehouse table or view, with their types and descriptions.",
             parameters=types.Schema(
@@ -111,7 +131,7 @@ TOOLS = types.Tool(
 )
 
 
-def _execute_tool(con, call) -> tuple:
+def _execute_tool(con, call, client) -> tuple:
     """Returns (label for display, result text)."""
     if call.name == "run_readonly_sql":
         sql = call.args["sql"]
@@ -119,6 +139,10 @@ def _execute_tool(con, call) -> tuple:
     if call.name == "describe_table":
         table_name = call.args["table_name"]
         return f"describe_table({table_name})", describe_table(con, table_name)
+    if call.name == "search_forecast_discussions":
+        query = call.args["query"]
+        result = search_forecast_discussions(con, client, query, embed_with_retry=retry_on_transient_error)
+        return f"search_forecast_discussions({query!r})", result
     return f"<unknown tool: {call.name}>", f"ERROR: unknown tool {call.name}"
 
 
@@ -153,7 +177,7 @@ def run_agent_turn(client: genai.Client, con, contents: list, on_tool_call=None)
 
         response_parts = []
         for call in function_calls:
-            label, result = _execute_tool(con, call)
+            label, result = _execute_tool(con, call, client)
             if on_tool_call:
                 on_tool_call(label, result)
             else:

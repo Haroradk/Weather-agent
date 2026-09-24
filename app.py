@@ -84,7 +84,28 @@ def _rainy_days_sql(con):
     return f"SELECT city, {expression} AS rainy_days FROM {table} WHERE {filter_sql} GROUP BY city"
 
 
+def _answer_forecasters_vs_model(df):
+    scored = df.dropna(subset=["forecaster_rain_correct", "model_rain_correct"])
+    if scored.empty:
+        return "No days can be scored yet - check back once more forecast days have passed."
+    return (
+        f"On the **{len(scored)}** days both can be scored, the NWS forecasters' rain call was right "
+        f"**{int(scored['forecaster_rain_correct'].sum())}** times and our ML model's "
+        f"**{int(scored['model_rain_correct'].sum())}** times. The forecasters' calls were extracted "
+        "from their free-text discussions by an LLM in the pipeline."
+    )
+
+
 DEMO_QUESTIONS = [
+    {
+        "label": "Who calls rain better: NWS forecasters or our model? (from unstructured text)",
+        "sql": (
+            "SELECT target_date, forecaster_rain_expected, model_precipitation_sum_mm, "
+            "actual_precipitation_sum_mm, forecaster_rain_correct, model_rain_correct "
+            "FROM gold.forecaster_vs_model_vs_actual ORDER BY target_date"
+        ),
+        "answer": _answer_forecasters_vs_model,
+    },
     {
         "label": "Which city had the most rainy days? (metric from the semantic layer)",
         "sql": _rainy_days_sql,

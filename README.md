@@ -118,6 +118,19 @@ Gemini request:
 Demo mode's first question ("most rainy days") builds its SQL from `gold.metric_definitions` at
 run time, so you can watch the semantic layer drive a query without spending any quota.
 
+## Searching what forecasters wrote (RAG)
+
+`search_forecast_discussions` (`search_tool.py`) is the retrieval half of RAG
+(retrieval-augmented generation). weather-app's pipeline stores National Weather Service forecaster
+discussions (New York) split into sections, each with an embedding. This tool embeds the question
+the same way and ranks sections by cosine similarity in DuckDB, then the model answers from those
+passages. Matching is by meaning: "is it safe to swim at the beach?" finds the section about rip
+currents, although it never uses the words "safe" or "swim".
+
+The embedding model and vector size are read from the table rather than hard-coded, because a
+query embedded with a different model gives meaningless rankings without raising any error. Each
+search costs one embedding call, on a different model (and quota) from the chat model.
+
 ## What's deliberately simple here (and worth pushing on next)
 
 - **No conversation memory across restarts.** `contents` lives in memory for
