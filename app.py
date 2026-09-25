@@ -32,6 +32,13 @@ from catalog_tool import CATALOG_SCHEMA, METRICS_QUERY, TABLES_QUERY
 from sql_tool import run_readonly_query
 
 st.set_page_config(page_title="Weather Agent", page_icon="\U0001F916", layout="centered")
+# Newer Streamlit versions cut long button labels off with an ellipsis; the
+# starter questions need to wrap onto a second line instead.
+st.markdown(
+    "<style>[data-testid^='stBaseButton'] [data-testid='stMarkdownContainer'], [data-testid^='stBaseButton'] p "
+    "{white-space: normal; text-overflow: clip; overflow: visible;}</style>",
+    unsafe_allow_html=True,
+)
 
 # Same palette as the dashboard (weather-etl-pipeline/app.py), so the two apps read as one product.
 CITY_COLORS = {"Copenhagen": "#00412D", "London": "#9BCDA0", "New York": "#4B1932"}
@@ -260,7 +267,10 @@ def result_chart(df: pd.DataFrame):
     city_color = alt.Color("city:N", scale=alt.Scale(domain=list(CITY_COLORS), range=list(CITY_COLORS.values())))
 
     if dates:
-        x = alt.X(f"{dates[0]}:T", title=None)
+        # Daily data: one tick per day on short ranges, never intra-day ticks like "12 PM".
+        short_range = (df[dates[0]].max() - df[dates[0]].min()).days <= 14
+        axis = alt.Axis(format="%d %b", labelAngle=0, tickCount="day" if short_range else alt.Undefined)
+        x = alt.X(f"{dates[0]}:T", title=None, axis=axis)
         if has_cities:
             y = numeric[0]
             return alt.Chart(df).mark_line(point=True).encode(x=x, y=alt.Y(f"{y}:Q", title=y), color=city_color, tooltip=list(df.columns))
