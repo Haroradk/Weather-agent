@@ -75,14 +75,30 @@ streamlit run app.py
 ```
 
 Opens at http://localhost:8502. Same agent loop as the CLI (imports
-`run_agent_turn` from `agent.py` directly, doesn't duplicate it), in a chat
-interface - each tool call renders as an expandable bubble showing the SQL
-and its result.
+`run_agent_turn` from `agent.py` directly, doesn't duplicate it). The loop
+reports each step as it happens (`on_step`), and the tools hand back
+structured results next to the text the model reads, so the UI can show more
+than the model sees:
+
+- **How I got this** - a panel that fills in live while the agent works:
+  catalog read, columns looked up, SQL run (with row counts), texts searched.
+  Collapsed under each answer afterwards.
+- **Data behind this answer** - every query result as a sortable table with a
+  CSV download, plus a chart when the shape suits one (a line over time if
+  there's a date column, bars for a handful of labelled values). Built from
+  data already fetched, so no extra Gemini calls.
+- **Forecaster passages** - when the agent searched the NWS texts, the
+  passages it retrieved, with issue time and match score.
+- **Starter questions** on an empty chat, and a sidebar with pipeline status,
+  data freshness and the tables and metrics it can use - read live from the
+  same catalog the agent is given.
+
+The theme in `.streamlit/config.toml` matches the dashboard's.
 
 The free Gemini tier is tight (5 requests/minute, 20/day), so there's a
-**"Demo mode"** checkbox in the sidebar for exercising the UI without
+**"Demo mode"** switch in the sidebar for exercising the UI without
 spending any of it: it skips the LLM entirely. Instead of typing a
-question, you pick one from a fixed dropdown list, it runs the real query
+question, you click one from a fixed list, it runs the real query
 behind that question against MotherDuck, and slots the actual returned
 values into a canned sentence template (e.g. "Copenhagen had the most
 rain, with 4.2mm on 2026-09-18"). The *data* is real; the *sentence* is

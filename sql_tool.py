@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 
 import duckdb
+import pandas as pd
 
 FORBIDDEN_KEYWORDS = [
     "INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "ATTACH", "DETACH",
@@ -47,21 +48,23 @@ def validate_readonly_sql(sql: str) -> str | None:
     return None
 
 
-def run_readonly_sql(con: duckdb.DuckDBPyConnection, sql: str) -> str:
-    """Validates, runs, and formats a query as plain text for the model to read."""
+def run_readonly_query(con: duckdb.DuckDBPyConnection, sql: str) -> tuple[str, pd.DataFrame | None]:
+    """Validates and runs a query. Returns (plain text for the model to read,
+    DataFrame of the full result for a UI to show - None if nothing ran)."""
     error = validate_readonly_sql(sql)
     if error:
-        return f"QUERY REJECTED: {error}"
+        return f"QUERY REJECTED: {error}", None
 
     try:
         con.execute(sql)
         rows = con.fetchall()
         columns = [d[0] for d in con.description]
     except Exception as e:
-        return f"QUERY FAILED: {e}"
+        return f"QUERY FAILED: {e}", None
 
+    df = pd.DataFrame(rows, columns=columns)
     if not rows:
-        return "Query ran successfully but returned no rows."
+        return "Query ran successfully but returned no rows.", df
 
     truncated = len(rows) > MAX_ROWS_RETURNED
     shown_rows = rows[:MAX_ROWS_RETURNED]
@@ -74,4 +77,5 @@ def run_readonly_sql(con: duckdb.DuckDBPyConnection, sql: str) -> str:
     if truncated:
         result += f"\n... ({len(rows) - MAX_ROWS_RETURNED} more row(s) truncated)"
 
-    return result
+    return result, df
+

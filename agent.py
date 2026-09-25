@@ -27,8 +27,8 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 import config
 from catalog_tool import build_catalog_summary, describe_table
-from search_tool import search_forecast_discussions
-from sql_tool import run_readonly_sql
+from search_tool import find_forecast_sections, format_sections
+from sql_tool import run_readonly_query
 
 
 def _is_retryable(exception: BaseException) -> bool:
@@ -131,30 +131,56 @@ TOOLS = types.Tool(
 )
 
 
-def _execute_tool(con, call, client) -> tuple:
-    """Returns (label for display, result text)."""
+def _execute_tool(con, call, client) -> dict:
+    """Runs one tool call. Returns a step: {"tool", "label", "result"} plus
+    "df" (SQL result rows) or "sources" (matched passages) for a UI to show.
+    "result" is the text the model reads."""
     if call.name == "run_readonly_sql":
         sql = call.args["sql"]
-        return sql, run_readonly_sql(con, sql)
+        result, df = run_readonly_query(con, sql)
+        return {"tool": call.name, "label": sql, "arg": sql, "result": result, "df": df}
     if call.name == "describe_table":
         table_name = call.args["table_name"]
-        return f"describe_table({table_name})", describe_table(con, table_name)
+        return {
+            "tool": call.name,
+            "label": f"describe_table({table_name})",
+            "arg": table_name,
+            "result": describe_table(con, table_name),
+        }
     if call.name == "search_forecast_discussions":
         query = call.args["query"]
-        result = search_forecast_discussions(con, client, query, embed_with_retry=retry_on_transient_error)
-        return f"search_forecast_discussions({query!r})", result
-    return f"<unknown tool: {call.name}>", f"ERROR: unknown tool {call.name}"
+        sections, message = find_forecast_sections(con, client, query, embed_with_retry=retry_on_transient_error)
+        return {
+            "tool": call.name,
+            "label": f"search_forecast_discussions({query!r})",
+            "arg": query,
+            "result": message or format_sections(query, sections),
+            "sources": sections,
+        }
+    return {"tool": call.name, "label": f"<unknown tool: {call.name}>", "result": f"ERROR: unknown tool {call.name}"}
 
 
-def run_agent_turn(client: genai.Client, con, contents: list, on_tool_call=None) -> str:
+def _print_step(step: dict) -> None:
+    result = step["result"]
+    print(f"  [tool] {step['label']}")
+    print(f"  [tool result] {result[:300]}{'...' if len(result) > 300 else ''}")
+
+
+def run_agent_turn(client: genai.Client, con, contents: list, on_step=None) -> str:
     """Runs the tool-use loop for one user turn, mutating `contents` in place
     with everything that happened, and returning the final text answer.
 
-    on_tool_call(label, result), if given, is called instead of printing -
-    lets a UI (e.g. app.py) render the same tool-call transparency the CLI
-    prints, without duplicating this loop."""
+    on_step(step), if given, is called with each step as it happens (see
+    _execute_tool; the first is the catalog read) instead of printing - lets
+    a UI (e.g. app.py) show the agent's work live, without duplicating this loop."""
+    catalog = build_catalog_summary(con)
+    if on_step:
+        tables_part, metrics_part = catalog.split("\n\n", 1)
+        n_tables, n_metrics = (sum(line.startswith("- ") for line in part.splitlines()) for part in (tables_part, metrics_part))
+        label = f"Read the warehouse catalog: {n_tables} tables, {n_metrics} metric definitions"
+        on_step({"tool": "catalog", "label": label, "result": catalog})
     generate_config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_PROMPT_TEMPLATE.format(catalog=build_catalog_summary(con)),
+        system_instruction=SYSTEM_PROMPT_TEMPLATE.format(catalog=catalog),
         tools=[TOOLS],
     )
 
@@ -177,15 +203,10 @@ def run_agent_turn(client: genai.Client, con, contents: list, on_tool_call=None)
 
         response_parts = []
         for call in function_calls:
-            label, result = _execute_tool(con, call, client)
-            if on_tool_call:
-                on_tool_call(label, result)
-            else:
-                print(f"  [tool] {label}")
-                print(f"  [tool result] {result[:300]}{'...' if len(result) > 300 else ''}")
-
+            step = _execute_tool(con, call, client)
+            (on_step or _print_step)(step)
             response_parts.append(
-                types.Part.from_function_response(name=call.name, response={"result": result})
+                types.Part.from_function_response(name=call.name, response={"result": step["result"]})
             )
 
         contents.append(types.Content(role="user", parts=response_parts))

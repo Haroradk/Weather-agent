@@ -2,3 +2,5 @@ duckdb
 python-dotenv
 google-genai
 streamlit
+pandas
+altair
